@@ -1,0 +1,159 @@
+;; convergence-controller — the platform's own reconciler, running on
+;; the platform it manages. Replaces tatara/tatara-reconciler.
+;;
+;; Cookbook pattern #46-style (composition: state-machine + rule-driven
+;; controller + attestation chain). Cited in
+;; theory/WASM-RUNTIME-COMPLETE.md §III.
+;;
+;; Closes the recursive loop: the WASM/Lisp/tatara runtime that runs
+;; ComputeUnit-defined programs is itself running a ComputeUnit-
+;; defined program.
+
+(use-library github:pleme-io/tatara-lisp-controllers/lib/defrule-driven-controller.tatara)
+(use-library github:pleme-io/tatara-lisp-controllers/lib/defstate-machine.tatara)
+(use-domain  pleme/k8s)
+(use-domain  pleme/tameshi)
+(use-domain  pleme/fluxcd)
+
+;; ── 8-phase Unix-process lifecycle ────────────────────────────────────
+
+(defstate-machine process-lifecycle
+  :states [:Pending :Planning :Validating :Applying
+           :Verifying :Attesting :Succeeded :Failed]
+  :transitions
+    {[:Pending     :Planning]   plan-process
+     [:Planning    :Validating] validate-plan
+     [:Validating  :Applying]   apply-via-flux
+     [:Applying    :Verifying]  poll-flux-status
+     [:Verifying   :Attesting]  compute-attestation
+     [:Attesting   :Succeeded]  finalize-success
+     [:Validating  :Failed]     fail-validation
+     [:Applying    :Failed]     fail-apply
+     [:Verifying   :Failed]     fail-verify}
+  :on-error  (transition-to :Failed))
+
+;; ── controller body — runs per Process change ────────────────────────
+
+(defrule-driven-controller convergence-controller
+  :version       "v0.1.0"
+  :config-schema ProcessSpec
+  :rule-schema   ProcessRule
+  :watches       [(:tatara.pleme.io/v1alpha1 :processes)
+                  (:tatara.pleme.io/v1alpha1 :processtables)
+                  (:kustomize.toolkit.fluxcd.io/v1 :kustomizations)
+                  (:helm.toolkit.fluxcd.io/v2 :helmreleases)]
+
+  :reconcile
+    (let* [process       (current-resource)
+           current-state (status-field process :phase :Pending)
+           next-state    (advance-state-machine process-lifecycle
+                                                current-state
+                                                process)]
+      (when (not= current-state next-state)
+        (k8s/patch-status process {:phase next-state})
+        (emit-event :PhaseTransition
+                    {:process (k8s/name process)
+                     :from    current-state
+                     :to      next-state})))
+
+  :status-fields  [:phase :flux-status :attestation-blake3 :error])
+
+;; ── step implementations ─────────────────────────────────────────────
+
+(defn plan-process [process]
+  ;; Resolve the substrate ref into a typed plan.
+  (let* [substrate (k8s/spec-field process :substrate)
+         plan      (substrate/resolve substrate)]
+    (k8s/patch-status process {:resolved-plan plan})
+    :Validating))
+
+(defn validate-plan [process]
+  (let* [plan       (status-field process :resolved-plan)
+         compliance (k8s/spec-field process :compliance)]
+    (cond
+      (not (substrate/typecheck plan))
+        (do (set-error process "plan failed typecheck") :Failed)
+      (not (kensa/passes? plan compliance))
+        (do (set-error process "plan failed compliance") :Failed)
+      :else
+        :Applying)))
+
+(defn apply-via-flux [process]
+  ;; Emit FluxCD CRs (Kustomization or HelmRelease) for the source-
+  ;; controller / kustomize-controller / helm-controller to apply.
+  (let* [plan (status-field process :resolved-plan)]
+    (doseq [resource (substrate/flux-resources plan)]
+      (k8s/apply-resource resource))
+    :Verifying))
+
+(defn poll-flux-status [process]
+  (let* [flux-name (process-flux-name process)
+         readiness (fluxcd/readiness flux-name)]
+    (cond
+      (= readiness :ready)   :Attesting
+      (= readiness :failed)  :Failed
+      :else                  :Verifying)))     ; stay; reconciler retries on next tick
+
+(defn compute-attestation [process]
+  ;; Three-pillar BLAKE3 attestation: artifact || control || intent || prev.
+  (let* [chain (tameshi/three-pillar-blake3
+                 :artifact   (fluxcd/applied-artifact process)
+                 :control    (k8s/process-control-state process)
+                 :intent     (k8s/spec-snapshot process)
+                 :prev       (status-field process :attestation-blake3))]
+    (k8s/patch-status process {:attestation-blake3 chain})
+    :Succeeded))
+
+(defn finalize-success [process]
+  (emit-event :ProcessSucceeded
+              {:process (k8s/name process)
+               :attestation (status-field process :attestation-blake3)})
+  :Succeeded)
+
+(defn fail-validation [process]
+  (emit-event :ProcessFailed
+              {:process (k8s/name process)
+               :phase :Validating
+               :error (status-field process :error)})
+  :Failed)
+
+(defn fail-apply [process]
+  (emit-event :ProcessFailed {:phase :Applying})
+  :Failed)
+
+(defn fail-verify [process]
+  (emit-event :ProcessFailed {:phase :Verifying})
+  :Failed)
+
+(defn process-flux-name [process]
+  (str (k8s/name process) "-flux"))
+
+(defn set-error [process msg]
+  (k8s/patch-status process {:error msg}))
+
+;; ── typed schemas — the CRD ──────────────────────────────────────────
+
+(defschema ProcessSpec
+  :pid          :integer
+  :children     (default (list-of :string) [])
+  :substrate    SubstrateRef
+  :compliance   CompliancePolicy
+  :attestation  AttestationPolicy)
+
+(defschema SubstrateRef
+  :flake-url    :string
+  :flake-output :string
+  :commit       (default :string nil))
+
+(defschema CompliancePolicy
+  :framework  (enum :NIST-800-53 :OSCAL :FedRAMP :CIS-Benchmarks :ArmoBest)
+  :gate-mode  (default (enum :advisory :enforce) :enforce))
+
+(defschema AttestationPolicy
+  :pillars  (default (list-of (enum :artifact :control :intent)) [:artifact :control :intent])
+  :store    (enum :openclaw :sigstore :both))
+
+(defschema ProcessRule
+  :phase-on-error  (default (enum :retry :pause :fail) :retry)
+  :timeout         (default :duration "10m")
+  :grace-period    (default :duration "30s"))

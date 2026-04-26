@@ -1,0 +1,39 @@
+---
+apiVersion: wasm.pleme.io/v1alpha1
+kind: ComputeUnit
+metadata:
+  name: convergence-controller
+  namespace: tatara-system
+spec:
+  module:
+    source: github:pleme-io/programs/convergence-controller/main.tlisp?ref=v0.1.0
+
+  trigger:
+    watch:
+      crd: tatara.pleme.io/Process
+      and:
+        - { group: "tatara.pleme.io/v1alpha1",            kind: "ProcessTable" }
+        - { group: "kustomize.toolkit.fluxcd.io/v1",      kind: "Kustomization" }
+        - { group: "helm.toolkit.fluxcd.io/v2",           kind: "HelmRelease" }
+
+  capabilities:
+    - kube-cr-watch@tatara.pleme.io/processes
+    - kube-cr-watch@tatara.pleme.io/processtables
+    - kube-cr-watch@kustomize.toolkit.fluxcd.io/kustomizations
+    - kube-cr-watch@helm.toolkit.fluxcd.io/helmreleases
+    - kube-cr-write@kustomize.toolkit.fluxcd.io/kustomizations
+    - kube-cr-write@helm.toolkit.fluxcd.io/helmreleases
+    - kube-cr-write@tatara.pleme.io/processes
+    - kube-event-emit
+    # Tameshi attestation needs a verifier endpoint.
+    - http-out:registry.pleme.io
+    - http-out:openclaw.tatara-system.svc.cluster.local
+
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 1000m, memory: 512Mi }
+
+  # Phase α: parallel running with the Rust tatara-reconciler. This
+  # CR is opt-in; flip Process.spec.runtime = lisp to route to this
+  # controller. The Rust controller continues to handle Process CRs
+  # without the field set.
