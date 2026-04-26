@@ -10,51 +10,97 @@
 ;; Prints a typed summary at exit; CR.status holds the structured report.
 
 (use-domain pleme/tameshi)
+
 (use-domain pleme/k8s)
 
-(defprogram fleet-attestation-sweep
-  :version "v0.1.0"
-  :config-schema FleetSweepConfig
-
-  (defmain [args]
-    (let* [cfg          (parse-args args FleetSweepConfig)
-           clusters     (resolve-clusters cfg)
-           reports      (map verify-cluster clusters)
-           failed-ones  (filter :failed reports)]
-      (when (seq failed-ones)
-        (emit-event :AttestationFailures
-                    {:count (count failed-ones)
-                     :clusters (map :cluster failed-ones)}))
-      (write-status :reports reports
-                    :verified-at (now-iso8601))
+(defprogram
+  fleet-attestation-sweep
+  :version
+  "v0.1.0"
+  :config-schema
+  FleetSweepConfig
+  (defmain
+    [args]
+    (let*
+      [cfg
+      (parse-args args FleetSweepConfig)
+      clusters
+      (resolve-clusters cfg)
+      reports
+      (map verify-cluster clusters)
+      failed-ones
+      (filter :failed reports)
+      ]
+      (when
+        (seq failed-ones)
+        (emit-event
+          :attestation-failures
+          {:count
+          (count failed-ones)
+          :clusters
+          (map :cluster failed-ones)
+          }))
+      (write-status :reports reports :verified-at (now-iso8601))
       (if (seq failed-ones) :failed :ok))))
 
-(defn resolve-clusters [cfg]
+(defn
+  resolve-clusters
+  [cfg]
   (cond
-    (seq (:clusters cfg))   (:clusters cfg)
-    :else                   (k8s/list-cluster-secrets :namespace "flux-system")))
+    (seq (:clusters cfg))
+    (:clusters cfg)
+    :else
+    (k8s/list-cluster-secrets :namespace "flux-system")))
 
-(defn verify-cluster [cluster-name]
-  (let* [archs   (k8s/list-resources :group   "pangea.pleme.io"
-                                     :version "v1alpha1"
-                                     :kind    "PangeaArchitecture"
-                                     :context cluster-name)
-         results (map verify-arch archs)
-         failed  (filter :failed results)]
-    {:cluster cluster-name
-     :total   (count results)
-     :verified (count (filter :verified results))
-     :failed  (count failed)
-     :failed-architectures (map :name failed)}))
+(defn
+  verify-cluster
+  [cluster-name]
+  (let*
+    [archs
+    (k8s/list-resources
+      :group "pangea.pleme.io"
+      :version "v1alpha1"
+      :kind "PangeaArchitecture"
+      :context cluster-name)
+    results
+    (map verify-arch archs)
+    failed
+    (filter :failed results)
+    ]
+    {:cluster
+    cluster-name
+    :total
+    (count results)
+    :verified
+    (count (filter :verified results))
+    :failed
+    (count failed)
+    :failed-architectures
+    (map :name failed)
+    }))
 
-(defn verify-arch [arch]
-  (let* [chain (tameshi/attestation-chain arch)
-         valid (tameshi/verify-chain chain)]
-    {:name (k8s/name arch)
-     :verified valid
-     :failed   (not valid)
-     :reason   (when (not valid) (tameshi/last-error chain))}))
+(defn
+  verify-arch
+  [arch]
+  (let*
+    [chain
+    (tameshi/attestation-chain arch)
+    valid
+    (tameshi/verify-chain chain)
+    ]
+    {:name
+    (k8s/name arch)
+    :verified
+    valid
+    :failed
+    (not valid)
+    :reason
+    (when (not valid) (tameshi/last-error chain))
+    }))
 
-(defschema FleetSweepConfig
-  :clusters     (default (list-of :string) [])    ; empty = all
-  :max-parallel (default :integer 4))
+(defschema
+  FleetSweepConfig
+  :clusters
+  (default (list-of :string) [])
+  :max-parallel
+  (default :integer 4))

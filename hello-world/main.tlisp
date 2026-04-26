@@ -22,22 +22,17 @@
 
 ;; ── responses authored as Lisp data, serialized at the boundary ─────
 
-(define healthz-body
+(define
+  healthz-body
   (json-stringify
-    (list (list "status" "ok")
-          (list "served-by" "tatara-script")
-          (list "module-version" "v0.1.0"))))
+    (list (list "status" "ok") (list "served-by" "tatara-script") (list "module-version" "v0.1.0"))))
 
-(define hello-body
-  (json-stringify
-    (list (list "message" "Hello, world!")
-          (list "served-by" "tatara-script"))))
+(define
+  hello-body
+  (json-stringify (list (list "message" "Hello, world!") (list "served-by" "tatara-script"))))
 
 ;; ── routing table ───────────────────────────────────────────────────
 
 (http-serve-static
   8080
-  (list
-    (list "/healthz" 200 healthz-body)
-    (list "/"        200 hello-body)
-    (list "/hello"   200 hello-body)))
+  (list (list "/healthz" 200 healthz-body) (list "/" 200 hello-body) (list "/hello" 200 hello-body)))

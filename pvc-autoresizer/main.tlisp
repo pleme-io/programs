@@ -12,87 +12,165 @@
 ;;   prom-query@<vmsingle-or-similar-prometheus-endpoint>
 
 (use-domain pleme/k8s)
+
 (use-domain pleme/prom)
-(use-domain pleme/quantity)        ; parses "30Gi" → 32212254720, etc.
 
-(defjob pvc-autoresizer
-  :version "v0.1.0"
-  :config-schema PvcAutoresizerConfig
-  :schedule      "*/5 * * * *"
+(use-domain pleme/quantity)
 
-  (defreconcile-tick []
-    (let* [cfg     (current-config)
-           targets (find-target-pvcs cfg)
-           now     (now-epoch)]
-      (doseq [pvc targets]
-        (process-one pvc cfg now)))))
+; parses "30Gi" → 32212254720, etc.
 
-(defschema PvcAutoresizerConfig
-  :trigger-at         (default :float  0.80)   ; expand when used/cap > this
-  :expand-factor      (default :float  1.25)   ; multiplier on capacity
-  :max-size           (default :string "100Gi")
-  :cooldown-seconds   (default :integer 600)
-  :prometheus-url     (default :string "http://vmsingle-vm.monitoring.svc:8429")
-  :selector           (default :map {:matchLabels {:breathable "true"}})
-  :namespaces         (default (list-of :string) [])
-  :dry-run            (default :bool false))
+(defjob
+  pvc-autoresizer
+  :version
+  "v0.1.0"
+  :config-schema
+  PvcAutoresizerConfig
+  :schedule
+  "*/5 * * * *"
+  (defreconcile-tick
+    []
+    (let*
+      [cfg
+      (current-config)
+      targets
+      (find-target-pvcs cfg)
+      now
+      (now-epoch)
+      ]
+      (doseq [pvc targets] (process-one pvc cfg now)))))
+
+(defschema
+  PvcAutoresizerConfig
+  :trigger-at
+  (default :float 0.8)
+  :expand-factor
+  (default :float 1.25)
+  :max-size
+  (default :string "100Gi")
+  :cooldown-seconds
+  (default :integer 600)
+  :prometheus-url
+  (default :string "http://vmsingle-vm.monitoring.svc:8429")
+  :selector
+  (default :map {:matchLabels {:breathable "true" }})
+  :namespaces
+  (default (list-of :string) [])
+  :dry-run
+  (default :bool false))
 
 ;; ── helpers — tiny, focused functions ────────────────────────────────
 
-(defn find-target-pvcs [cfg]
-  (k8s/list-pvcs :namespaces (:namespaces cfg)
-                 :selector   (:selector cfg)))
+(defn
+  find-target-pvcs
+  [cfg]
+  (k8s/list-pvcs :namespaces (:namespaces cfg) :selector (:selector cfg)))
 
-(defn process-one [pvc cfg now]
-  (let* [ns        (k8s/namespace pvc)
-         name      (k8s/name pvc)
-         capacity  (quantity/parse (k8s/pvc-storage-request pvc))
-         used+cap  (prom/query (:prometheus-url cfg)
-                               (volume-stats-query ns name))
-         used      (:used used+cap)
-         actual    (:capacity used+cap)
-         ratio     (if (> actual 0) (/ used actual) 0.0)]
+(defn
+  process-one
+  [pvc
+  cfg
+  now]
+  (let*
+    [ns
+    (k8s/namespace pvc)
+    name
+    (k8s/name pvc)
+    capacity
+    (quantity/parse (k8s/pvc-storage-request pvc))
+    used+cap
+    (prom/query (:prometheus-url cfg) (volume-stats-query ns name))
+    used
+    (:used used+cap)
+    actual
+    (:capacity used+cap)
+    ratio
+    (if (> actual 0) (/ used actual) 0.0)
+    ]
     (cond
       (< ratio (:trigger-at cfg))
-        :below-threshold
+      :below-threshold
       (in-cooldown? pvc now (:cooldown-seconds cfg))
-        (emit-event :PvcInCooldown {:namespace ns :pvc name})
+      (emit-event :pvc-in-cooldown {:namespace ns :pvc name})
       :else
-        (try-expand pvc capacity cfg now))))
+      (try-expand pvc capacity cfg now))))
 
-(defn try-expand [pvc capacity cfg now]
-  (let* [new-bytes (math/ceil (* capacity (:expand-factor cfg)))
-         max-bytes (quantity/parse (:max-size cfg))]
+(defn
+  try-expand
+  [pvc
+  capacity
+  cfg
+  now]
+  (let*
+    [new-bytes
+    (math/ceil (* capacity (:expand-factor cfg)))
+    max-bytes
+    (quantity/parse (:max-size cfg))
+    ]
     (cond
       (> new-bytes max-bytes)
-        (emit-event :PvcAtCeiling
-                    {:namespace (k8s/namespace pvc)
-                     :pvc       (k8s/name pvc)
-                     :capacity  (quantity/format capacity)
-                     :max       (:max-size cfg)})
+      (emit-event
+        :pvc-at-ceiling
+        {:namespace
+        (k8s/namespace pvc)
+        :pvc
+        (k8s/name pvc)
+        :capacity
+        (quantity/format capacity)
+        :max
+        (:max-size cfg)
+        })
       (:dry-run cfg)
-        (emit-event :PvcExpansionDryRun
-                    {:namespace (k8s/namespace pvc)
-                     :pvc       (k8s/name pvc)
-                     :from      (quantity/format capacity)
-                     :to        (quantity/format-gibibytes new-bytes)})
+      (emit-event
+        :pvc-expansion-dry-run
+        {:namespace
+        (k8s/namespace pvc)
+        :pvc
+        (k8s/name pvc)
+        :from
+        (quantity/format capacity)
+        :to
+        (quantity/format-gibibytes new-bytes)
+        })
       :else
-        (do
-          (k8s/patch-pvc-storage pvc (quantity/format-gibibytes new-bytes))
-          (k8s/annotate-pvc pvc :pleme.pleme.io/last-expansion-epoch (str now))
-          (emit-event :PvcExpanded
-                      {:namespace (k8s/namespace pvc)
-                       :pvc       (k8s/name pvc)
-                       :from      (quantity/format capacity)
-                       :to        (quantity/format-gibibytes new-bytes)})))))
+      (do
+        (k8s/patch-pvc-storage pvc (quantity/format-gibibytes new-bytes))
+        (k8s/annotate-pvc pvc :pleme.pleme.io/last-expansion-epoch (str now))
+        (emit-event
+          :pvc-expanded
+          {:namespace
+          (k8s/namespace pvc)
+          :pvc
+          (k8s/name pvc)
+          :from
+          (quantity/format capacity)
+          :to
+          (quantity/format-gibibytes new-bytes)
+          })))))
 
-(defn in-cooldown? [pvc now cooldown-seconds]
-  (when-let [last-epoch (k8s/annotation pvc :pleme.pleme.io/last-expansion-epoch)]
+(defn
+  in-cooldown?
+  [pvc
+  now
+  cooldown-seconds]
+  (when-let
+    [last-epoch
+    (k8s/annotation pvc :pleme.pleme.io/last-expansion-epoch)
+    ]
     (< (- now (parse-int last-epoch)) cooldown-seconds)))
 
-(defn volume-stats-query [ns pvc]
-  (str "kubelet_volume_stats_used_bytes{namespace=\"" ns
-       "\",persistentvolumeclaim=\"" pvc "\"}"
-       " / "
-       "kubelet_volume_stats_capacity_bytes{namespace=\"" ns
-       "\",persistentvolumeclaim=\"" pvc "\"}"))
+(defn
+  volume-stats-query
+  [ns
+  pvc]
+  (str
+    "kubelet_volume_stats_used_bytes{namespace=\""
+    ns
+    "\",persistentvolumeclaim=\""
+    pvc
+    "\"}"
+    " / "
+    "kubelet_volume_stats_capacity_bytes{namespace=\""
+    ns
+    "\",persistentvolumeclaim=\""
+    pvc
+    "\"}"))
