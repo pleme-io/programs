@@ -43,7 +43,10 @@
 
 (defn thumb-key [original-url variant-name]
   (let [path (s3-path-from-url original-url)]
-    (str/replace path #"\.(jpg|jpeg|png|webp|avif)$"
+    ;; Pattern is a string the host str/replace treats as a regex —
+    ;; the Clojure-flavor `#"..."` reader literal isn't supported by
+    ;; tatara-lisp's lexer (`#` is reserved for `#t`/`#f`).
+    (str/replace path "\\.(jpg|jpeg|png|webp|avif)$"
                  (str "." variant-name ".$1"))))
 
 (defschema ThumbnailFnConfig

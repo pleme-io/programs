@@ -44,7 +44,7 @@
   (let* [all-repos (k8s/list-resources :group "source.toolkit.fluxcd.io"
                                        :version "v1"
                                        :kind "GitRepository")]
-    (first (filter #(repo-matches? % github-full-name) all-repos))))
+    (first (filter (lambda (r) (repo-matches? r github-full-name)) all-repos))))
 
 (defn repo-matches? [git-repo github-full-name]
   (let [url (k8s/spec-field git-repo :url)]
