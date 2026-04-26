@@ -70,18 +70,36 @@ Or via FluxCD per
 kubectl apply -f computeunit.yaml
 ```
 
-## Test
+## Test — local, today
+
+The .tlisp file is **runnable today** via tatara-script + the
+`http-serve-static` stdlib primitive (added 2026-04-26):
 
 ```sh
-# Local — no cluster needed:
-nix run pleme-io/tatara-lisp#script -- ./main.tlisp
+# In one terminal:
+nix run github:pleme-io/tatara-lisp#script -- ./main.tlisp
+# [http-serve-static] listening on http://0.0.0.0:8080
 
-# Cluster — once deployed:
+# In another terminal:
+curl http://localhost:8080/hello
+# {"message":"Hello, world!","served-by":"tatara-script"}
+
+curl http://localhost:8080/healthz
+# {"module-version":"v0.1.0","served-by":"tatara-script","status":"ok"}
+```
+
+This is the same .tlisp the cluster deployment will run; only the
+runtime changes (host-side `tatara-script` vs cluster-side
+`wasm-engine`).
+
+## Test — cluster (Phase B)
+
+Once `tatara-lisp-script` exposes `--target=wasm32-wasi` and the
+wasm-operator publishes:
+
+```sh
 curl https://hello.quero.cloud/hello
 # {"message":"Hello, world!","served-by":"hello-world-7d8f-abc"}
-
-curl https://hello.quero.cloud/hello/drzzln
-# {"message":"Hello, drzzln!","served-by":"hello-world-7d8f-abc"}
 
 curl https://hello.quero.cloud/healthz
 # {"status":"ok","pod":"hello-world-7d8f-abc","namespace":"tatara-system",...}

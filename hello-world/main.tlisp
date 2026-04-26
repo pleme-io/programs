@@ -1,112 +1,43 @@
 ;; hello-world — the canonical pleme-io WASM/WASI breathable service.
 ;;
-;; Demonstrates every layer of theory/META-FRAMEWORK.md:
+;; Two ways to run this same source:
 ;;
-;;   Layer 0: this .tlisp source
-;;   Layer 1: compiled WASM (~2 MiB) + tameshi attestation chain
-;;   Layer 2: ComputeUnit CR (12 lines of YAML)
-;;   Layer 3: pleme-computeunit library chart (auto-emits sidecars)
-;;   Layer 4: lareira-hello-world consumer chart (~30 lines values)
-;;   Layer 5: cluster HelmRelease (FluxCD-deployed)
+;;   1. LOCALLY (today, via tatara-script):
+;;        nix run github:pleme-io/tatara-lisp#script -- main.tlisp
+;;        curl http://localhost:8080/hello
+;;        → {"message":"Hello, world!", ...}
 ;;
-;; Features demonstrated:
-;;   - service shape (HTTP listener, scale-to-zero via KEDA HTTP)
-;;   - typed config schema (the YAML-on-top surface from
-;;     theory/LISP-YAML-CONTROLLERS.md §V tier V.2)
-;;   - capability-bounded host calls (no ambient authority)
-;;   - Cloudflare Tunnel ingress to hello.quero.cloud
-;;   - structured logging (JSON events to stdout)
-;;   - Prometheus metrics on port 9090 (scraped by ServiceMonitor)
+;;   2. IN-CLUSTER (when wasm-operator publishes per WASM-PACKAGING.md
+;;      Phase B): same .tlisp, dispatched by a ComputeUnit + Helm chart
+;;      lareira-hello-world. Same JSON contract; KEDA HTTP scales 0→N→0.
 ;;
-;; Cold start: ~3s (wasmtime instantiation + JIT). Idle: 0 pods.
+;; The cluster version uses the (defservice) shape that compiles to a
+;; service-trigger ComputeUnit. The local version uses (http-serve-static)
+;; from tatara-script's stdlib — fixed responses, no closure dispatch.
+;; Both serve the same /hello → "Hello, world!" contract, demonstrating
+;; the META-FRAMEWORK §V evolutionary identity (Year 1: stdlib http
+;; server; Year 2: WASM service shape).
 ;;
 ;; Cookbook patterns covered: 9 (service + KEDA HTTP), 42 (HTTP server).
-;; Authoring shape: V.2 from LISP-YAML-CONTROLLERS.md (config+escape hatch).
 
-(use-library github:pleme-io/tatara-lisp-controllers/lib/defwebhook-handler.tatara)
-(use-domain  pleme/http)
-(use-domain  pleme/k8s)        ; for downward-API: cluster name, namespace, pod name
-(use-domain  pleme/log)
-(use-domain  pleme/metrics)
+;; ── responses authored as Lisp data, serialized at the boundary ─────
 
-;; ── typed config — auto-generates the CRD schema + admission ────────
+(define healthz-body
+  (json-stringify
+    (list (list "status" "ok")
+          (list "served-by" "tatara-script")
+          (list "module-version" "v0.1.0"))))
 
-(defschema HelloWorldConfig
-  "Operator-facing config. Edited via YAML in the consumer chart."
-  :greeting    (default :string "Hello")
-  :audience    (default :string "world")
-  :punctuation (default :string "!")
-  :debug       (default :bool false))
+(define hello-body
+  (json-stringify
+    (list (list "message" "Hello, world!")
+          (list "served-by" "tatara-script"))))
 
-;; ── prometheus counters ─────────────────────────────────────────────
+;; ── routing table ───────────────────────────────────────────────────
 
-(defmetric requests-total
-  :type      :counter
-  :name      "hello_world_requests_total"
-  :help      "Total /hello requests served"
-  :labels    [:status :greeting])
-
-(defmetric request-duration
-  :type      :histogram
-  :name      "hello_world_request_duration_seconds"
-  :help      "Hello request duration"
-  :buckets   [0.001 0.005 0.01 0.05 0.1])
-
-;; ── service — the breathable HTTP handler ───────────────────────────
-
-(defservice hello-world
-  :version "v0.1.0"
-  :config-schema HelloWorldConfig
-  :listen-port 8080
-
-  :routes
-  [{:path "/healthz"
-    :method :GET
-    :handler healthz}
-
-   {:path "/"
-    :method :GET
-    :handler hello}
-
-   {:path "/hello"
-    :method :GET
-    :handler hello}
-
-   {:path "/hello/:name"
-    :method :GET
-    :handler hello-by-name}])
-
-;; ── handlers — small, focused, capability-bounded ───────────────────
-
-(defn healthz [_request]
-  (response 200 (json {:status "ok"
-                       :pod (k8s/pod-name)
-                       :namespace (k8s/namespace)
-                       :cluster (or (k8s/cluster-name) "unknown")
-                       :module-version "v0.1.0"})))
-
-(defn hello [request]
-  (with-timing request-duration
-    (let* [cfg      (current-config)
-           name     (:audience cfg)
-           greeting (compose-greeting cfg name)]
-      (counter-inc requests-total {:status "200" :greeting (:greeting cfg)})
-      (when (:debug cfg)
-        (log/info :event "hello-served"
-                  :name name
-                  :greeting (:greeting cfg)
-                  :pod (k8s/pod-name)))
-      (response 200 (json {:message greeting
-                           :served-by (k8s/pod-name)})))))
-
-(defn hello-by-name [request]
-  (with-timing request-duration
-    (let* [cfg      (current-config)
-           name     (path-param request :name)
-           greeting (compose-greeting cfg name)]
-      (counter-inc requests-total {:status "200" :greeting (:greeting cfg)})
-      (response 200 (json {:message greeting
-                           :served-by (k8s/pod-name)})))))
-
-(defn compose-greeting [cfg audience]
-  (str (:greeting cfg) ", " audience (:punctuation cfg)))
+(http-serve-static
+  8080
+  (list
+    (list "/healthz" 200 healthz-body)
+    (list "/"        200 hello-body)
+    (list "/hello"   200 hello-body)))
