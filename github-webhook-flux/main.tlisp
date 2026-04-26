@@ -1,0 +1,59 @@
+;; github-webhook-flux — receive GitHub push webhooks, kick the
+;; matching FluxCD GitRepository to reconcile immediately. Lets pushes
+;; propagate in <10s instead of FluxCD's default 5min poll.
+;;
+;; Cookbook pattern #9 (theory/WASM-PATTERNS.md).
+;; Shape: service (HTTP listener with KEDA HTTP scale-to-zero).
+
+(use-library github:pleme-io/tatara-lisp-controllers/lib/defwebhook-handler.tatara)
+(use-domain  pleme/k8s)
+
+(defwebhook-handler github-webhook-flux
+  :version       "v0.1.0"
+  :config-schema GitHubWebhookFluxConfig
+
+  :routes
+  [{:path     "/git-webhook"
+    :method   :POST
+    :verify   {:type :github
+               :secret {:name "github-webhook-secret"
+                        :namespace "flux-system"
+                        :key "secret"}}
+    :handler  handle-github-push}])
+
+(defn handle-github-push []
+  (let* [body       (request-body-json)
+         repo-name  (get-in body [:repository :full_name])
+         git-repo   (find-git-repository repo-name)]
+    (cond
+      (nil? git-repo)
+        (response 200 (json {:status "ignored"
+                             :reason (str "no GitRepository for " repo-name)}))
+      :else
+        (do
+          (k8s/annotate (:resource git-repo)
+                        :reconcile.fluxcd.io/requestedAt
+                        (now-iso8601))
+          (response 200 (json {:status "kicked"
+                               :git_repository (:name git-repo)
+                               :namespace (:namespace git-repo)}))))))
+
+(defn find-git-repository [github-full-name]
+  ;; Walk all GitRepository resources, find one whose spec.url
+  ;; references this github full-name.
+  (let* [all-repos (k8s/list-resources :group "source.toolkit.fluxcd.io"
+                                       :version "v1"
+                                       :kind "GitRepository")]
+    (first (filter #(repo-matches? % github-full-name) all-repos))))
+
+(defn repo-matches? [git-repo github-full-name]
+  (let [url (k8s/spec-field git-repo :url)]
+    (or (str/contains? url (str "github.com/" github-full-name))
+        (str/contains? url (str "github.com:" github-full-name)))))
+
+(defschema GitHubWebhookFluxConfig
+  :host       (default :string "git-webhook.flux-system.svc.cluster.local")
+  ;; webhookSecret intentionally not in here — it's pulled from the
+  ;; named Secret declared in the route's :verify spec, NOT from
+  ;; this config. This keeps the webhook secret out of the CR YAML.
+  )

@@ -1,0 +1,64 @@
+;; thumbnail-fn — async event-driven function. Subscribe to
+;; `nats:rio.events.photo.uploaded`; for each event, fetch the original
+;; from S3, generate JPEG/WebP/AVIF thumbnails, write back to a
+;; thumbnails bucket, emit a `nats:rio.events.photo.thumbnailed`
+;; completion event.
+;;
+;; Cookbook pattern #43 (image thumbnailer) re-cast as event-driven.
+;; Shape: function (the new shape formalized in WASM-PACKAGING.md §IV.1).
+
+(use-domain pleme/nats)
+(use-domain pleme/s3)
+(use-domain pleme/image)        ; provides image/decode + image/encode + image/resize
+
+(deffunction thumbnail-fn
+  :version "v0.1.0"
+  :config-schema ThumbnailFnConfig
+
+  ;; Each invocation receives a batch of events (NATS pull-batch).
+  ;; The `event` parameter is a parsed JSON object whose shape is
+  ;; declared on the publishing side as PhotoUploadedEvent.
+  (defhandler [event]
+    (let* [cfg     (current-config)
+           src     (:s3_url event)
+           bytes   (s3/get cfg src)
+           img     (image/decode bytes)
+           outputs (for [variant (:variants cfg)]
+                     {:name   (:name variant)
+                      :bytes  (image/encode (image/resize img
+                                                          (:width variant)
+                                                          (:height variant)
+                                                          :fit (:fit variant))
+                                            (:format variant)
+                                            (:quality variant))})]
+      (doseq [out outputs]
+        (s3/put cfg
+                (thumb-key (:s3_url event) (:name out))
+                (:bytes out)))
+      (nats/publish cfg
+                    (str (:thumbnail-subject cfg))
+                    {:original (:s3_url event)
+                     :thumbnails (map :name outputs)
+                     :produced-at (now-iso8601)}))))
+
+(defn thumb-key [original-url variant-name]
+  (let [path (s3-path-from-url original-url)]
+    (str/replace path #"\.(jpg|jpeg|png|webp|avif)$"
+                 (str "." variant-name ".$1"))))
+
+(defschema ThumbnailFnConfig
+  :s3-credentials       :secret-ref
+  :s3-region            :string
+  :originals-bucket     :string
+  :thumbnails-bucket    :string
+  :nats-url             :string
+  :thumbnail-subject    (default :string "rio.events.photo.thumbnailed")
+  :variants             (list-of ThumbnailVariant))
+
+(defschema ThumbnailVariant
+  :name      :string                        ; e.g. "small", "medium", "large"
+  :width     :integer
+  :height    :integer
+  :fit       (default (enum :contain :cover :fill) :cover)
+  :format    (default (enum :jpeg :webp :avif) :webp)
+  :quality   (default :integer 85))

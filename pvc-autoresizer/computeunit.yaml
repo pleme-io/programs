@@ -1,0 +1,34 @@
+---
+# Apply this to wire the pvc-autoresizer into the cluster's wasm-operator.
+apiVersion: wasm.pleme.io/v1alpha1
+kind: ComputeUnit
+metadata:
+  name: pvc-autoresizer
+  namespace: tatara-system
+spec:
+  module:
+    source: github:pleme-io/programs/pvc-autoresizer/main.tlisp?ref=v0.1.0
+  trigger:
+    cron: "*/5 * * * *"
+  capabilities:
+    - kube-pvc-list
+    - kube-pvc-patch
+    - prom-query@vmsingle-vm.monitoring.svc:8429
+    - kube-event-emit
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+  # The job's runtime configuration. Operators edit this; no WASM rebuild
+  # is needed on tweaks.
+  config:
+    triggerAt: 0.80
+    expandFactor: 1.25
+    maxSize: "100Gi"
+    cooldownSeconds: 600
+    prometheusUrl: "http://vmsingle-vm.monitoring.svc:8429"
+    selector:
+      matchLabels:
+        breathable: "true"
+    namespaces: []           # empty = cluster-wide scan
+    dryRun: false

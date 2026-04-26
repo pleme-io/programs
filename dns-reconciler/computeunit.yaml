@@ -1,0 +1,24 @@
+---
+apiVersion: wasm.pleme.io/v1alpha1
+kind: ComputeUnit
+metadata:
+  name: dns-reconciler
+  namespace: tatara-system
+spec:
+  module:
+    source: github:pleme-io/programs/dns-reconciler/main.tlisp?ref=v0.1.0
+  trigger:
+    watch:
+      crd: dns.pleme.io/DnsReconciler
+      and:
+        - { group: "v1",                   kind: "Service" }
+        - { group: "networking.k8s.io",    kind: "Ingress" }
+  capabilities:
+    - kube-cr-watch@dns.pleme.io/dnsreconcilers
+    - kube-cr-watch@v1/services
+    - kube-cr-watch@networking.k8s.io/ingresses
+    - kube-secret-read@dns-system/cloudflare-pangea
+    - http-out:api.cloudflare.com
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 500m, memory: 256Mi }

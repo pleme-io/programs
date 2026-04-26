@@ -1,0 +1,27 @@
+---
+# Apply, run, then it deletes itself (TTL after Succeeded = 60s).
+apiVersion: wasm.pleme.io/v1alpha1
+kind: ComputeUnit
+metadata:
+  name: fleet-attestation-sweep
+  namespace: tatara-system
+spec:
+  module:
+    source: github:pleme-io/programs/fleet-attestation-sweep/main.tlisp?ref=v0.1.0
+
+  trigger:
+    oneShot:
+      args: ["--clusters=plo,rio,seph"]
+
+  ttlSecondsAfterFinished: 60
+
+  capabilities:
+    - kube-resource-list@pangea.pleme.io/pangeaarchitectures
+    - kube-resource-list@v1/secrets
+    - kube-event-emit
+    - http-out:registry.pleme.io     # for tameshi chain verification
+    - http-out:*.pleme.io            # for cross-cluster K8s API access via kubeconfig
+
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 1000m, memory: 512Mi }

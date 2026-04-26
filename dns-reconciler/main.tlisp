@@ -1,0 +1,63 @@
+;; DNS reconciler — sync K8s Services/Ingresses with the
+;; `dns.pleme.io/host` annotation to a DNS provider zone.
+;;
+;; Cookbook pattern #2 (theory/WASM-PATTERNS.md).
+;; Authoring shape: V.2 — YAML rules with optional Lisp escape hatches.
+;;
+;; Replaces: ExternalDNS.
+
+(use-library github:pleme-io/tatara-lisp-controllers/lib/defrule-driven-controller.tatara)
+(use-domain  pleme/dns)
+(use-domain  pleme/k8s)
+
+(defrule-driven-controller dns-reconciler
+  :version        "v0.1.0"
+  :config-schema  DnsReconcilerConfig
+  :rule-schema    DnsRule
+  :watches        [(:v1                 :services)
+                   (:networking.k8s.io/v1 :ingresses)]
+  :status-fields  [:lastSyncAt :recordsManaged]
+
+  :reconcile
+    (let* [host  (extract resource (:source rule))
+           value (k8s/resource-address resource (:record-type rule))
+           value (if-let [t (:transform rule)]
+                   (eval-sexp t :bindings { :resource resource
+                                            :host host
+                                            :value value })
+                   value)]
+      (when (and host value)
+        (dns/upsert :provider     (:provider config)
+                    :zone-id      (:zone-id config)
+                    :credentials  (k8s/read-secret (:credential-secret config))
+                    :record-type  (:record-type rule)
+                    :name         host
+                    :value        value
+                    :ttl          (or (:ttl rule) (:default-ttl config))
+                    :proxied      (:proxied rule)))))
+
+(defschema DnsReconcilerConfig
+  :provider          (enum :cloudflare :route53 :hetzner :gcp)
+  :zone-id           :string
+  :credential-secret :secret-ref
+  :default-ttl       (default :integer 300)
+  :rules             (list-of DnsRule))
+
+(defschema DnsRule
+  :match           ResourceSelector
+  :record-type     (enum :A :AAAA :CNAME :TXT)
+  :ttl             (default :integer 300)
+  :proxied         (default :bool false)
+  :source          ValueSource
+  :transform       (default :sexp nil))
+
+(defschema ResourceSelector
+  :kind         (enum :Service :Ingress)
+  :namespaces   (default (list-of :string) [])
+  :annotations  (default :map {})
+  :labels       (default :map {}))
+
+(defschema ValueSource
+  :type    (enum :xpath :annotation :label :computed)
+  :expr    (default :string nil)
+  :key     (default :string nil))
