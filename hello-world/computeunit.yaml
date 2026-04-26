@@ -1,0 +1,40 @@
+---
+# Reference ComputeUnit for hello-world. Operators install via the
+# lareira-hello-world Helm chart (see helmworks/charts/lareira-hello-world);
+# this file is the kubectl-friendly equivalent.
+apiVersion: wasm.pleme.io/v1alpha1
+kind: ComputeUnit
+metadata:
+  name: hello-world
+  namespace: tatara-system
+spec:
+  module:
+    source: github:pleme-io/programs/hello-world/main.tlisp?ref=v0.1.0
+
+  trigger:
+    service:
+      port: 8080
+      paths: ["/", "/hello", "/healthz"]
+      hosts:
+        - hello.tatara-system.svc.cluster.local
+        - hello.quero.cloud
+      breathability:
+        enabled: true
+        minReplicas: 0       # full scale-to-zero
+        maxReplicas: 5
+        cooldownPeriod: 600   # warm 10 min after last request
+        targetPendingRequests: 1
+
+  capabilities:
+    - http-in:0.0.0.0:8080
+    - kube-downward-api    # for pod-name + namespace in responses
+
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+  config:
+    greeting: Hello
+    audience: world
+    punctuation: "!"
+    debug: false
