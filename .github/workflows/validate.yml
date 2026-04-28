@@ -1,0 +1,21 @@
+name: validate
+
+# pleme-io/programs — multi-caixa monorepo. Each subdirectory is a
+# Lisp Servico (consumed by tatara-script via github: URL); the parent
+# repo doesn't need to publish OCI images, just gate every push.
+#
+# See substrate/.github/workflows/caixa-validate.yml for the steps
+# (cse-lint repo --strict + feira lint).
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  validate:
+    uses: pleme-io/substrate/.github/workflows/caixa-validate.yml@main
+    secrets: inherit
+    permissions:
+      contents: read
