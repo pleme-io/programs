@@ -23,7 +23,7 @@ spec:
 
   resources:
     requests: { cpu: 200m, memory: 256Mi }
-    limits:   { cpu: 2000m, memory: 1Gi }      ; image work is bursty
+    limits:   { cpu: 2000m, memory: 1Gi }      # image work is bursty
 
   config:
     s3Region: us-east-1
