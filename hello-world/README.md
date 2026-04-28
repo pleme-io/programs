@@ -1,16 +1,41 @@
 # hello-world
 
-The canonical pleme-io WASM/WASI breathable service. Demonstrates
-every layer of [`META-FRAMEWORK.md`](https://github.com/pleme-io/theory/blob/main/META-FRAMEWORK.md):
+The canonical pleme-io WASM/WASI breathable service. Companion to
+[`pleme-io/hello-rio`](https://github.com/pleme-io/hello-rio) (the
+canonical *Rust*-authored caixa Servico) — both serve identical JSON
+on `/`, `/hello`, `/healthz` and both render to the same
+`wasm.pleme.io/v1alpha1 ComputeUnit` shape, proving caixa is
+source-language-agnostic for service-class packages.
+
+Demonstrates every layer of [`META-FRAMEWORK.md`](https://github.com/pleme-io/theory/blob/main/META-FRAMEWORK.md):
 
 | Layer | Artifact | Where |
 |---|---|---|
-| 0 — source | `main.tlisp` (~70 lines) | this directory |
+| 0 — source | `caixa.lisp` + `main.tlisp` (~70 lines) | this directory |
 | 1 — artifact | compiled WASM (~2 MiB) | ghcr.io/pleme-io OR cluster cache |
-| 2 — typed CR | `ComputeUnit` | `computeunit.yaml` reference |
+| 2 — typed CR | `ComputeUnit` | `servicos/hello-world.computeunit.yaml` |
 | 3 — library chart | `pleme-computeunit` (sidecars) | helmworks |
 | 4 — consumer chart | `lareira-hello-world` (defaults) | helmworks |
 | 5 — deployment | FluxCD HelmRelease | `pleme-io/k8s/clusters/<name>/programs/` |
+
+## caixa-native
+
+This program is a typed [caixa](https://github.com/pleme-io/caixa)
+`Servico` — `caixa.lisp` declares the package and
+`servicos/hello-world.computeunit.yaml` is the cluster-side runtime
+contract. Render the per-program lareira chart with:
+
+```bash
+feira chart                       # → .caixa/chart/lareira-hello-world/
+```
+
+Deploy to a cluster with one verb (upserts the entry into the cluster's
+fleet HelmRelease, FluxCD picks it up):
+
+```bash
+feira deploy --cluster rio --dry-run    # preview
+feira deploy --cluster rio --apply      # write + commit + push
+```
 
 ## What it does
 
