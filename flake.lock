@@ -1445,11 +1445,11 @@
         "substrate": "substrate"
       },
       "locked": {
-        "lastModified": 1780432530,
-        "narHash": "sha256-QX6UKqEX08oK+LXSyTioEXQkjurWXqgs8l0hjM+B8JE=",
+        "lastModified": 1780492335,
+        "narHash": "sha256-kVV1OJNqld5t2mwLK/tA6qYZCEJqx/0bw9W+F58lgwA=",
         "owner": "pleme-io",
         "repo": "tatara-lisp",
-        "rev": "045110a294c306e8d1ca8d65b1b1edbaea876196",
+        "rev": "d4929a3710ed95d91aae3870ce5934eddb45d4a4",
         "type": "github"
       },
       "original": {
